@@ -23,6 +23,9 @@ jobs:
       - name: Kutuphaneleri kur
         run: pip install anthropic requests moviepy pillow google-auth-oauthlib google-api-python-client
 
+      - name: Fontlari kur (thumbnail yazilari icin gerekli)
+        run: sudo apt-get update -y && sudo apt-get install -y fonts-liberation fonts-dejavu-core
+
       - name: config.py olustur (Secrets'ten)
         run: |
           cat > config.py << 'EOF'
