@@ -240,9 +240,27 @@ def assemble_video(audio_path, clip_paths, output_path):
 
 # ---------- 5) Thumbnail ----------
 
+def cover_crop(img, target_w, target_h):
+    """Resmi, oranini bozmadan hedef boyutu tamamen dolduracak sekilde ortadan kirpar
+    -- rastgele bir kenar dilimi yerine fotografin merkezini gosterir."""
+    src_w, src_h = img.size
+    scale = max(target_w / src_w, target_h / src_h)
+    new_w, new_h = max(1, round(src_w * scale)), max(1, round(src_h * scale))
+    img = img.resize((new_w, new_h))
+    left = (new_w - target_w) // 2
+    top = (new_h - target_h) // 2
+    return img.crop((left, top, left + target_w, top + target_h))
+
+
 def generate_thumbnail(background_path, title_text, output_path, channel_label="VETERINER HEKIM BILGI BANKASI"):
     W, H = 1280, 720
-    img = Image.open(background_path).convert("RGB").resize((W, H))
+    photo = Image.open(background_path).convert("RGB")
+
+    # Fotografi SADECE sol foto alanini, oranini bozmadan ortadan kirparak doldur
+    photo_region_w = 600
+    photo_cropped = cover_crop(photo, photo_region_w, H)
+    img = Image.new("RGB", (W, H), (20, 20, 20))
+    img.paste(photo_cropped, (0, 0))
 
     # Sari panel + izgara deseni icin ayri bir katman
     yellow_layer = Image.new("RGB", (W, H), (255, 212, 0))
@@ -263,16 +281,21 @@ def generate_thumbnail(background_path, title_text, output_path, channel_label="
     draw = ImageDraw.Draw(img)
 
     def load_font(size):
-        for name in ("arialbd.ttf", "Arial Bold.ttf", "arial.ttf"):
+        # Windows'ta (yerel test) VE Linux'ta (GitHub Actions) calisacak fontlari dene
+        candidates = (
+            "arialbd.ttf", "Arial Bold.ttf", "arial.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        )
+        for name in candidates:
             try:
                 return ImageFont.truetype(name, size)
             except Exception:
                 continue
         return ImageFont.load_default()
 
-    panel_center_x = 913  # sari panelin yaklasik orta noktasi
+    panel_center_x = 913
 
-    # Marka etiketi -- beyaz hap, kirmizi yazi
     label_font = load_font(26)
     label_bbox = draw.textbbox((0, 0), channel_label, font=label_font)
     label_w = label_bbox[2] - label_bbox[0]
@@ -289,7 +312,6 @@ def generate_thumbnail(background_path, title_text, output_path, channel_label="
         font=label_font, fill=(200, 16, 46), anchor="mm",
     )
 
-    # Baslik -- ortalanmis, kirmizi dolgu + beyaz kontur
     def wrap_text(text, font, max_width):
         words = text.split()
         lines, current = [], ""
