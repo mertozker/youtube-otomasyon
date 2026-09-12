@@ -51,6 +51,23 @@ def set_thumbnail(youtube, video_id, thumbnail_path):
     ).execute()
 
 
+def sanitize_tags(tags, max_total_chars=460):
+    """YouTube etiketler icin toplam ~500 karakter siniri koyuyor -- fazlasi
+    yuklemeyi hatayla basarisiz kilabilir. Onemli/genis etiketler basta kalsin
+    diye siradan kesiyoruz."""
+    result, total = [], 0
+    for t in (tags or []):
+        t = t.strip()
+        if not t:
+            continue
+        added = len(t) + 1
+        if total + added > max_total_chars:
+            break
+        result.append(t)
+        total += added
+    return result
+
+
 def publish():
     metadata_path = os.path.join(OUTPUT_DIR, "metadata.json")
     video_path = os.path.join(OUTPUT_DIR, "final_video.mp4")
@@ -73,7 +90,7 @@ def publish():
         "snippet": {
             "title": script["title"],
             "description": script.get("description", ""),
-            "tags": script.get("tags", []),
+            "tags": sanitize_tags(script.get("tags", [])),
             "categoryId": "15",  # Pets & Animals
         },
         "status": {
