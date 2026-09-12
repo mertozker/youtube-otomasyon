@@ -1,0 +1,48 @@
+name: Haftalik Video Uretimi
+
+on:
+  schedule:
+    - cron: '0 5 * * 1,3,5'   # Pazartesi, Carsamba, Cuma - 08:00 (Turkiye saati)
+  workflow_dispatch:          # GitHub Actions sekmesinden manuel de calistirilabilir
+
+jobs:
+  produce-and-upload:
+    runs-on: ubuntu-latest
+    env:
+      GOOGLE_OAUTH_CREDENTIALS: ${{ secrets.GOOGLE_OAUTH_CREDENTIALS }}
+
+    steps:
+      - name: Kodu indir
+        uses: actions/checkout@v4
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Kutuphaneleri kur
+        run: pip install anthropic requests moviepy pillow google-auth-oauthlib google-api-python-client
+
+      - name: config.py olustur (Secrets'ten)
+        run: |
+          cat > config.py << 'EOF'
+          ELEVENLABS_API_KEY = "${{ secrets.ELEVENLABS_API_KEY }}"
+          PEXELS_API_KEY = "${{ secrets.PEXELS_API_KEY }}"
+          CLAUDE_API_KEY = "${{ secrets.CLAUDE_API_KEY }}"
+          GMAIL_ADDRESS = "${{ secrets.GMAIL_ADDRESS }}"
+          GMAIL_APP_PASSWORD = "${{ secrets.GMAIL_APP_PASSWORD }}"
+          NOTIFY_EMAIL_TO = "${{ secrets.NOTIFY_EMAIL_TO }}"
+          CLAUDE_MODEL = "claude-sonnet-5"
+          CHANNEL_TOPIC_CONTEXT = (
+              "Evcil hayvan sahiplerine yonelik pratik veteriner sagligi bilgileri "
+              "(semptom tanima, ilk yardim, yaygin hastaliklar) ve kisa 'mit mi gercek mi' "
+              "formatinda hayvan sagligi videolari. Ton: guvenilir, sicak, abartisiz, "
+              "gercek bir veteriner hekim tarafindan anlatiliyormus gibi."
+          )
+          EOF
+
+      - name: Video uret
+        run: python content_pipeline.py
+
+      - name: YouTube'a private yukle ve bildirim gonder
+        run: python publish_video.py
