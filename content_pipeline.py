@@ -59,6 +59,9 @@ ONEMLI KURALLAR:
   (2) durumun/sorunun aciklamasi, (3) cozum ya da bilgi, (4) kisa bir kapanis/tavsiye.
   scene_queries listesi TAM OLARAK bu sirayla, anlatilan olaylarin gerceklesme sirasina
   birebir uygun olmali -- video, anlatimla ayni kronolojik akisi izlemeli.
+- Baslikta ve metinde sokak agzi/abartili gundelik ifadeler KULLANMA (orn. "cildirir",
+  "resmen oldurur", "cilgin" gibi kaliplar). Veteriner hekim kimligine yakisir,
+  guvenilir, sicak ama profesyonel bir dil kullan -- merak uyandirsin ama ciddiyetini korusun.
 
 SADECE asagidaki JSON formatinda cevap ver, baska hicbir metin ekleme:
 {{
@@ -237,37 +240,56 @@ def assemble_video(audio_path, clip_paths, output_path):
 
 # ---------- 5) Thumbnail ----------
 
-def generate_thumbnail(background_path, title_text, output_path, badge_text="VETERINER ACIKLIYOR"):
-    img = Image.open(background_path).convert("RGBA").resize((1280, 720))
+def generate_thumbnail(background_path, title_text, output_path, channel_label="VETERINER HEKIM BILGI BANKASI"):
+    W, H = 1280, 720
+    img = Image.open(background_path).convert("RGB").resize((W, H))
 
-    # Tum goruntuyu hafifce karart (metin kontrastini artirir)
-    dark_overlay = Image.new("RGBA", img.size, (0, 0, 0, 80))
-    img = Image.alpha_composite(img, dark_overlay)
+    # Sari panel + izgara deseni icin ayri bir katman
+    yellow_layer = Image.new("RGB", (W, H), (255, 212, 0))
+    ydraw = ImageDraw.Draw(yellow_layer)
+    grid_color = (240, 192, 0)
+    for x in range(420, W, 62):
+        ydraw.line([(x, 0), (x, H)], fill=grid_color, width=2)
+    for y in range(0, H, 75):
+        ydraw.line([(0, y), (W, y)], fill=grid_color, width=2)
 
-    # Alt kisimda baslik icin koyu lacivert tonlu YUMUSAK GECIS (duz siyah yerine --
-    # daha "profesyonel/marka" hissi verir)
-    gradient_overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    gdraw = ImageDraw.Draw(gradient_overlay)
-    gradient_top, gradient_bottom = 380, 720
-    gradient_color = (12, 18, 38)
-    for y in range(gradient_top, gradient_bottom):
-        alpha = int(210 * (y - gradient_top) / (gradient_bottom - gradient_top))
-        gdraw.line([(0, y), (1280, y)], fill=(*gradient_color, alpha))
-    img = Image.alpha_composite(img, gradient_overlay).convert("RGB")
+    # Capraz kesimli panel siniri (maske ile)
+    mask = Image.new("L", (W, H), 0)
+    mdraw = ImageDraw.Draw(mask)
+    panel_points = [(433, 0), (W, 0), (W, H), (546, H)]
+    mdraw.polygon(panel_points, fill=255)
 
+    img = Image.composite(yellow_layer, img, mask)
     draw = ImageDraw.Draw(img)
 
     def load_font(size):
-        for name in ("impact.ttf", "arialbd.ttf", "Arial Bold.ttf", "arial.ttf"):
+        for name in ("arialbd.ttf", "Arial Bold.ttf", "arial.ttf"):
             try:
                 return ImageFont.truetype(name, size)
             except Exception:
                 continue
         return ImageFont.load_default()
 
-    title_font = load_font(76)
-    badge_font = load_font(32)
+    panel_center_x = 913  # sari panelin yaklasik orta noktasi
 
+    # Marka etiketi -- beyaz hap, kirmizi yazi
+    label_font = load_font(26)
+    label_bbox = draw.textbbox((0, 0), channel_label, font=label_font)
+    label_w = label_bbox[2] - label_bbox[0]
+    label_h = label_bbox[3] - label_bbox[1]
+    pad_x, pad_y = 28, 16
+    pill_w, pill_h = label_w + pad_x * 2, label_h + pad_y * 2
+    pill_y0 = 34
+    draw.rounded_rectangle(
+        [panel_center_x - pill_w // 2, pill_y0, panel_center_x + pill_w // 2, pill_y0 + pill_h],
+        radius=pill_h // 2, fill="white",
+    )
+    draw.text(
+        (panel_center_x, pill_y0 + pill_h / 2), channel_label,
+        font=label_font, fill=(200, 16, 46), anchor="mm",
+    )
+
+    # Baslik -- ortalanmis, kirmizi dolgu + beyaz kontur
     def wrap_text(text, font, max_width):
         words = text.split()
         lines, current = [], ""
@@ -282,63 +304,20 @@ def generate_thumbnail(background_path, title_text, output_path, badge_text="VET
                 current = word
         if current:
             lines.append(current)
-        return lines[:3]  # en fazla 3 satir, tasmayi onler
+        return lines[:3]
 
-    lines = wrap_text(title_text.upper(), title_font, 1180)
-    line_height = 84
-    start_y = 700 - (len(lines) * line_height)
-
-    ACCENT_YELLOW = (255, 219, 0)
-    ACCENT_RED = (255, 71, 87)
+    title_font = load_font(84)
+    lines = wrap_text(title_text.upper(), title_font, 620)
+    line_height = 96
+    total_h = len(lines) * line_height
+    start_y = H // 2 - total_h // 2 + line_height // 2 + 30
 
     for i, line in enumerate(lines):
         y = start_y + i * line_height
-        words = line.split()
-        is_first_line = (i == 0)
-        is_last_line = (i == len(lines) - 1)
-
-        highlight1, rest = None, words
-        if is_first_line and len(words) > 1:
-            highlight1, rest = words[0], words[1:]
-
-        highlight2, middle = None, rest
-        if is_last_line and len(rest) > 1:
-            highlight2, middle = rest[-1], rest[:-1]
-
-        segments = []
-        if highlight1:
-            segments.append((highlight1 + " ", ACCENT_RED))
-        if middle:
-            segments.append((" ".join(middle) + (" " if highlight2 else ""), "white"))
-        if highlight2:
-            segments.append((highlight2, ACCENT_YELLOW))
-
-        x_cursor = 48
-        for text_part, color in segments:
-            draw.text(
-                (x_cursor, y), text_part, font=title_font, fill=color,
-                stroke_width=6, stroke_fill="black",
-            )
-            bbox = draw.textbbox((x_cursor, y), text_part, font=title_font, stroke_width=6)
-            x_cursor = bbox[2]
-
-    # Merak uyandirici rozet (sag ust kose)
-    padding_x, padding_y = 24, 14
-    bbox = draw.textbbox((0, 0), badge_text, font=badge_font)
-    badge_w = (bbox[2] - bbox[0]) + padding_x * 2
-    badge_h = (bbox[3] - bbox[1]) + padding_y * 2
-    badge_x0, badge_y0 = 1280 - badge_w - 30, 30
-    draw.rounded_rectangle(
-        [badge_x0, badge_y0, badge_x0 + badge_w, badge_y0 + badge_h],
-        radius=16, fill=ACCENT_YELLOW,
-    )
-    draw.text(
-        (badge_x0 + padding_x, badge_y0 + padding_y - bbox[1]),
-        badge_text, font=badge_font, fill="black",
-    )
-
-    # Ince renkli cerceve -- profesyonel/marka hissi
-    draw.rectangle([0, 0, 1279, 719], outline=ACCENT_YELLOW, width=8)
+        draw.text(
+            (panel_center_x, y), line, font=title_font, fill=(224, 52, 47),
+            stroke_width=9, stroke_fill="white", anchor="mm",
+        )
 
     img.save(output_path)
 
