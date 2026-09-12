@@ -24,6 +24,7 @@ KULLANIM:
 import os
 import sys
 import json
+import random
 import requests
 from anthropic import Anthropic
 from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips
@@ -54,12 +55,16 @@ ONEMLI KURALLAR:
   Bu, seslendirmenin dogal ve duzgun cikmasi icin kritik onemde.
 - Butun senaryo TEK BIR ana hayvan turune odaklansin (orn. sadece kopek YA DA sadece kedi),
   konular karisik olmasin -- bu, sahne goruntulerinin birbiriyle tutarli/uyumlu olmasini saglar.
+- voiceover_text ACIK BIR ANLATIM SIRASI izlesin: (1) dikkat cekici bir giris/soru,
+  (2) durumun/sorunun aciklamasi, (3) cozum ya da bilgi, (4) kisa bir kapanis/tavsiye.
+  scene_queries listesi TAM OLARAK bu sirayla, anlatilan olaylarin gerceklesme sirasina
+  birebir uygun olmali -- video, anlatimla ayni kronolojik akisi izlemeli.
 
 SADECE asagidaki JSON formatinda cevap ver, baska hicbir metin ekleme:
 {{
   "title": "YouTube video basligi (dikkat cekici, 60 karakter alti, dogru noktalama)",
   "description": "YouTube video aciklamasi (2-3 cumle, dogru noktalama), ardindan 6-8 ilgili hashtag (# ile, orn. #veteriner #evcilhayvansagligi)",
-  "tags": ["en az 12-15 SEO odakli anahtar kelime/etiket"],
+  "tags": ["en az 18-25 SEO odakli anahtar kelime/etiket -- hem genis kapsamli (orn. 'veteriner', 'evcil hayvan', 'kopek sagligi', 'pet') hem de spesifik uzun kuyruklu etiketler kariştir, boylece video hem genis hem hedefli aramalarda cikar"],
   "voiceover_text": "Turkce, dogal ve akici konusma dilinde, dogru noktalamali tam seslendirme metni",
   "scene_queries": ["ingilizce stok video arama terimi 1", "terim 2", "terim 3", "terim 4"]
 }}
@@ -144,10 +149,23 @@ def fetch_stock_clip(query, output_path):
     if not videos:
         return None
 
-    files = sorted(videos[0]["video_files"], key=lambda f: f.get("width", 0), reverse=True)
-    hd_file = next((f for f in files if f.get("width", 0) <= 1920), files[-1])
+    # En alakali ilk 3 sonuc arasinda, Full HD'ye (1920 genislik) en yakin
+    # ve onu assagi cekmeyen en kaliteli dosyayi sec.
+    best_file, best_score = None, -1
+    for video in videos[:3]:
+        for f in video.get("video_files", []):
+            width = f.get("width", 0)
+            if width <= 0:
+                continue
+            score = width if width <= 1920 else (1920 - (width - 1920))
+            if score > best_score:
+                best_score = score
+                best_file = f
 
-    video_resp = requests.get(hd_file["link"])
+    if not best_file:
+        return None
+
+    video_resp = requests.get(best_file["link"])
     with open(output_path, "wb") as f:
         f.write(video_resp.content)
     return output_path
@@ -173,6 +191,24 @@ def fetch_stock_photo(query, output_path):
 
 # ---------- 4) Video birlestirme ----------
 
+def apply_safe_fade(clip, duration, fade_in=True):
+    """Moviepy surumleri arasindaki API farkliliklarina karsi guvenli fade denemesi.
+    Basarisiz olursa klibi degistirmeden dondurur -- render asla bu yuzden cokmez."""
+    method_name = "fadein" if fade_in else "fadeout"
+    if hasattr(clip, method_name):
+        try:
+            return getattr(clip, method_name)(duration)
+        except Exception:
+            pass
+    try:
+        from moviepy.video.fx import FadeIn, FadeOut
+        effect = FadeIn(duration) if fade_in else FadeOut(duration)
+        return clip.with_effects([effect])
+    except Exception:
+        pass
+    return clip
+
+
 def assemble_video(audio_path, clip_paths, output_path):
     audio = AudioFileClip(audio_path)
     total_duration = audio.duration
@@ -189,7 +225,14 @@ def assemble_video(audio_path, clip_paths, output_path):
 
     video = concatenate_videoclips(segments, method="compose")
     video = video.with_audio(audio)
-    video.write_videofile(output_path, fps=30, codec="libx264", audio_codec="aac")
+
+    # Profesyonel bir acilis/kapanis icin yumusak gecis
+    video = apply_safe_fade(video, 0.6, fade_in=True)
+    video = apply_safe_fade(video, 0.6, fade_in=False)
+
+    video.write_videofile(
+        output_path, fps=30, codec="libx264", audio_codec="aac", bitrate="8000k"
+    )
 
 
 # ---------- 5) Thumbnail ----------
@@ -198,14 +241,19 @@ def generate_thumbnail(background_path, title_text, output_path, badge_text="VET
     img = Image.open(background_path).convert("RGBA").resize((1280, 720))
 
     # Tum goruntuyu hafifce karart (metin kontrastini artirir)
-    dark_overlay = Image.new("RGBA", img.size, (0, 0, 0, 90))
+    dark_overlay = Image.new("RGBA", img.size, (0, 0, 0, 80))
     img = Image.alpha_composite(img, dark_overlay)
 
-    # Alt kisimda baslik icin daha koyu bir bant
-    bottom_overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    bdraw = ImageDraw.Draw(bottom_overlay)
-    bdraw.rectangle([0, 420, 1280, 720], fill=(0, 0, 0, 175))
-    img = Image.alpha_composite(img, bottom_overlay).convert("RGB")
+    # Alt kisimda baslik icin koyu lacivert tonlu YUMUSAK GECIS (duz siyah yerine --
+    # daha "profesyonel/marka" hissi verir)
+    gradient_overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    gdraw = ImageDraw.Draw(gradient_overlay)
+    gradient_top, gradient_bottom = 380, 720
+    gradient_color = (12, 18, 38)
+    for y in range(gradient_top, gradient_bottom):
+        alpha = int(210 * (y - gradient_top) / (gradient_bottom - gradient_top))
+        gdraw.line([(0, y), (1280, y)], fill=(*gradient_color, alpha))
+    img = Image.alpha_composite(img, gradient_overlay).convert("RGB")
 
     draw = ImageDraw.Draw(img)
 
@@ -239,30 +287,40 @@ def generate_thumbnail(background_path, title_text, output_path, badge_text="VET
     lines = wrap_text(title_text.upper(), title_font, 1180)
     line_height = 84
     start_y = 700 - (len(lines) * line_height)
-    ACCENT_COLOR = (255, 219, 0)  # dikkat cekici sari -- merak uyandiran kelime icin
+
+    ACCENT_YELLOW = (255, 219, 0)
+    ACCENT_RED = (255, 71, 87)
 
     for i, line in enumerate(lines):
         y = start_y + i * line_height
         words = line.split()
+        is_first_line = (i == 0)
+        is_last_line = (i == len(lines) - 1)
 
-        if i == len(lines) - 1 and len(words) > 1:
-            normal_part = " ".join(words[:-1]) + " "
-            highlight_word = words[-1]
-        else:
-            normal_part = line
-            highlight_word = None
+        highlight1, rest = None, words
+        if is_first_line and len(words) > 1:
+            highlight1, rest = words[0], words[1:]
 
-        draw.text(
-            (48, y), normal_part, font=title_font, fill="white",
-            stroke_width=6, stroke_fill="black",
-        )
+        highlight2, middle = None, rest
+        if is_last_line and len(rest) > 1:
+            highlight2, middle = rest[-1], rest[:-1]
 
-        if highlight_word:
-            normal_bbox = draw.textbbox((48, y), normal_part, font=title_font, stroke_width=6)
+        segments = []
+        if highlight1:
+            segments.append((highlight1 + " ", ACCENT_RED))
+        if middle:
+            segments.append((" ".join(middle) + (" " if highlight2 else ""), "white"))
+        if highlight2:
+            segments.append((highlight2, ACCENT_YELLOW))
+
+        x_cursor = 48
+        for text_part, color in segments:
             draw.text(
-                (normal_bbox[2], y), highlight_word, font=title_font, fill=ACCENT_COLOR,
+                (x_cursor, y), text_part, font=title_font, fill=color,
                 stroke_width=6, stroke_fill="black",
             )
+            bbox = draw.textbbox((x_cursor, y), text_part, font=title_font, stroke_width=6)
+            x_cursor = bbox[2]
 
     # Merak uyandirici rozet (sag ust kose)
     padding_x, padding_y = 24, 14
@@ -272,14 +330,31 @@ def generate_thumbnail(background_path, title_text, output_path, badge_text="VET
     badge_x0, badge_y0 = 1280 - badge_w - 30, 30
     draw.rounded_rectangle(
         [badge_x0, badge_y0, badge_x0 + badge_w, badge_y0 + badge_h],
-        radius=16, fill=(255, 209, 0),
+        radius=16, fill=ACCENT_YELLOW,
     )
     draw.text(
         (badge_x0 + padding_x, badge_y0 + padding_y - bbox[1]),
         badge_text, font=badge_font, fill="black",
     )
 
+    # Ince renkli cerceve -- profesyonel/marka hissi
+    draw.rectangle([0, 0, 1279, 719], outline=ACCENT_YELLOW, width=8)
+
     img.save(output_path)
+
+
+def pick_custom_thumbnail_background():
+    """thumbnails/ klasorune yukledigin kendi fotograflarindan rastgele birini secer.
+    Klasor yoksa ya da bossa None doner (o zaman otomatik stok gorsele dusulur)."""
+    custom_dir = "thumbnails"
+    if os.path.isdir(custom_dir):
+        images = [
+            os.path.join(custom_dir, f) for f in os.listdir(custom_dir)
+            if f.lower().endswith((".jpg", ".jpeg", ".png"))
+        ]
+        if images:
+            return random.choice(images)
+    return None
 
 
 # ---------- Ana akis ----------
@@ -309,9 +384,14 @@ def run_pipeline(topic_hint=None):
     assemble_video(audio_path, clip_paths, video_path)
 
     print("5/5 Thumbnail olusturuluyor...")
-    thumb_bg = os.path.join(OUTPUT_DIR, "thumb_bg.jpg")
-    if fetch_stock_photo(script["scene_queries"][0], thumb_bg):
+    thumb_bg = pick_custom_thumbnail_background()
+    if thumb_bg:
+        print(f"    Kendi fotografin kullaniliyor: {thumb_bg}")
         generate_thumbnail(thumb_bg, script["title"], os.path.join(OUTPUT_DIR, "thumbnail.jpg"))
+    else:
+        stock_bg = os.path.join(OUTPUT_DIR, "thumb_bg.jpg")
+        if fetch_stock_photo(script["scene_queries"][0], stock_bg):
+            generate_thumbnail(stock_bg, script["title"], os.path.join(OUTPUT_DIR, "thumbnail.jpg"))
 
     with open(os.path.join(OUTPUT_DIR, "metadata.json"), "w", encoding="utf-8") as f:
         json.dump(script, f, ensure_ascii=False, indent=2)
